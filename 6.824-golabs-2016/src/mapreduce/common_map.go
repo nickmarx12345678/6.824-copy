@@ -2,6 +2,8 @@ package mapreduce
 
 import (
 	"hash/fnv"
+	"math"
+	"ioutil"
 )
 
 // doMap does the job of a map worker: it reads one of the input files
@@ -40,6 +42,11 @@ func doMap(
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
+	mappedKeyValuePairs = mapF(inFile, ioutil.ReadFile(inFile))
+	// Iterate through key: value pairs.
+		// Hash the key string, mod nReduce to come up with r.
+		// Generate output filename using reduceName(jobName, mapTaskNumber, r)
+		// Write JSON-encoded key: value pair after JSON encoding to output filename.
 }
 
 func ihash(s string) uint32 {
