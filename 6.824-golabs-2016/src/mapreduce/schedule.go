@@ -15,6 +15,25 @@ func (mr *Master) schedule(phase jobPhase) {
 		nios = len(mr.files)
 	}
 
+	for i := 0; i < ntasks; i++ {
+		var reply DoTaskReply
+		args := DoTaskArgs{
+			Phase:         phase,
+			JobName:       mr.jobName,
+			File:          mr.files[i],
+			TaskNumber:    i,
+			NumOtherPhase: ntasks,
+		}
+
+	}
+
+	for _, w := range mr.workers {
+		ok := call(w, "Worker.DoTask", args, &reply)
+		if !ok {
+			panic("couldnt make RPC")
+		}
+	}
+
 	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 
 	// All ntasks tasks have to be scheduled on workers, and only once all of

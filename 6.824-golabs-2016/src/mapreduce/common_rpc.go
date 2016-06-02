@@ -22,6 +22,10 @@ type DoTaskArgs struct {
 	NumOtherPhase int
 }
 
+type DoTaskReply struct {
+	OK bool
+}
+
 // ShutdownReply is the response to a WorkerShutdown.
 // It holds the number of tasks this worker has processed since it was started.
 type ShutdownReply struct {
