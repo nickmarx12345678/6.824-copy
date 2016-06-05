@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"math"
 	"ioutil"
+	"strconv"
 )
 
 // doMap does the job of a map worker: it reads one of the input files
@@ -42,7 +43,11 @@ func doMap(
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
-	mappedKeyValuePairs = mapF(inFile, ioutil.ReadFile(inFile))
+	mappedKeyValuePairs := mapF(inFile, ioutil.ReadFile(inFile))
+	for key, value := range mappedKeyValuePairs {
+		r := strconv.FormatFloat(math.Mod(float64(ihash(key)), float64(nReduce)), "f", -1, 64)
+		fileName = reduceName(jobName, mapTaskNumber, r)
+	}
 	// Iterate through key: value pairs.
 		// Hash the key string, mod nReduce to come up with r.
 		// Generate output filename using reduceName(jobName, mapTaskNumber, r)
