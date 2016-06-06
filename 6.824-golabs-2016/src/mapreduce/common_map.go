@@ -2,8 +2,9 @@ package mapreduce
 
 import (
 	"hash/fnv"
+	"io/ioutil"
+	"json"
 	"math"
-	"ioutil"
 	"strconv"
 )
 
@@ -43,15 +44,23 @@ func doMap(
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
-	mappedKeyValuePairs := mapF(inFile, ioutil.ReadFile(inFile))
-	for key, value := range mappedKeyValuePairs {
-		r := strconv.FormatFloat(math.Mod(float64(ihash(key)), float64(nReduce)), "f", -1, 64)
-		fileName = reduceName(jobName, mapTaskNumber, r)
-	}
+	fileContents, _ := ioutil.ReadFile(inFile)
+	mappedKeyValuePairs := mapF(inFile, string(fileContents))
 	// Iterate through key: value pairs.
+	for key, value := range mappedKeyValuePairs {
 		// Hash the key string, mod nReduce to come up with r.
+		r := strconv.FormatFloat(math.Mod(float64(ihash(key)), float64(nReduce)), "f", -1, 64)
 		// Generate output filename using reduceName(jobName, mapTaskNumber, r)
-		// Write JSON-encoded key: value pair after JSON encoding to output filename.
+		fileName = reduceName(jobName, mapTaskNumber, r)
+		// Encode key and value to JSON.
+		jsonBytes, _ := json.Marshal(map[string]string{
+			key: value,
+		})
+		// Write JSON string to file.
+		intermediateFile, _ := os.OpenFile(fileName, os.O_RDWR|os.O_APPEND, 0666)
+		intermediateFile.WriteString(string(jsonBytes) + "\n")
+		intermediateFile.Close()
+	}
 }
 
 func ihash(s string) uint32 {

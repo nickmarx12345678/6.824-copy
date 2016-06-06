@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 )
 
@@ -69,6 +70,11 @@ func jsonDecodeFileLineContents(fileName string) []map[string]string {
 	return jsonDecode(fileLineContents)
 }
 
+func jsonEncode(value interface{}) string {
+	jsonBytes, _ := json.Marshal(value)
+	return string(jsonBytes)
+}
+
 func prettyPrint(data []map[string]string) string {
 	output := ""
 	for i := 0; i < len(data); i++ {
@@ -78,7 +84,24 @@ func prettyPrint(data []map[string]string) string {
 	return output
 }
 
+func appendToFile(fileName string, inputString string) (int, error) {
+	fileHandle, _ := os.OpenFile(fileName, os.O_RDWR|os.O_APPEND, 0666)
+	defer fileHandle.Close()
+	num, err := fileHandle.WriteString(inputString)
+	return num, err
+}
+
 func main() {
 	data := jsonDecodeFileLineContents("testFile.txt")
 	fmt.Println(prettyPrint(data))
+	fileContents, _ := ioutil.ReadFile("testFile.txt")
+	fmt.Println(string(fileContents))
+	jsonData := map[string]string{
+		"new key": "new item",
+	}
+	appendToFile("testFile.txt", "\n"+jsonEncode(jsonData))
+	jsonBytes, _ := json.Marshal(map[string]string{
+		"something": "something else",
+	})
+	appendToFile("testFile.txt", "\n"+string(jsonBytes))
 }
