@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 )
 
 func countNumLinesFromFile(file *os.File) int {
@@ -66,8 +67,21 @@ func jsonDecode(jsonBytes [][]byte) []map[string]string {
 }
 
 func jsonDecodeFileLineContents(fileName string) []map[string]string {
+	/*
 	fileLineContents := getFileLineContents(fileName)
 	return jsonDecode(fileLineContents)
+	*/
+	fileContents, _ := ioutil.ReadFile(fileName)
+	lines := strings.Split(string(fileContents), "\n")
+	outputBuffer := make([]map[string]string, len(lines))
+	for i := 0; i < len(lines); i++ {
+		json.Unmarshal([]byte(lines[i]), &outputBuffer[i])
+		//fmt.Println(outputBuffer[i])
+		keyValue := make(map[string]string)
+		json.Unmarshal([]byte(lines[i]), &keyValue)
+		fmt.Println(keyValue)
+	}
+	return outputBuffer
 }
 
 func jsonEncode(value interface{}) string {
@@ -94,6 +108,7 @@ func appendToFile(fileName string, inputString string) (int, error) {
 func main() {
 	data := jsonDecodeFileLineContents("testFile.txt")
 	fmt.Println(prettyPrint(data))
+	/*
 	fileContents, _ := ioutil.ReadFile("testFile.txt")
 	fmt.Println(string(fileContents))
 	jsonData := map[string]string{
@@ -104,4 +119,5 @@ func main() {
 		"something": "something else",
 	})
 	appendToFile("testFile.txt", "\n"+string(jsonBytes))
+	*/
 }
