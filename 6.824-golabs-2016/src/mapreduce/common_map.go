@@ -1,11 +1,11 @@
 package mapreduce
 
 import (
+	"encoding/json"
 	"hash/fnv"
 	"io/ioutil"
-	"json"
 	"math"
-	"strconv"
+	"os"
 )
 
 // doMap does the job of a map worker: it reads one of the input files
@@ -45,19 +45,20 @@ func doMap(
 	//
 	// Remember to close the file after you have written all the values!
 	fileContents, _ := ioutil.ReadFile(inFile)
-	mappedKeyValuePairs := mapF(inFile, string(fileContents))
+	keyValues := mapF(inFile, string(fileContents))
 	// Iterate through key: value pairs.
-	for key, value := range mappedKeyValuePairs {
+	for i := 0; i < len(keyValues); i++ {
+		keyValue := keyValues[i]
 		// Hash the key string, mod nReduce to come up with r.
-		r := strconv.FormatFloat(math.Mod(float64(ihash(key)), float64(nReduce)), "f", -1, 64)
+		r := int(math.Mod(float64(ihash(keyValue.Key)), float64(nReduce)))
 		// Generate output filename using reduceName(jobName, mapTaskNumber, r)
-		fileName = reduceName(jobName, mapTaskNumber, r)
+		fileName := reduceName(jobName, mapTaskNumber, r)
 		// Encode key and value to JSON.
 		jsonBytes, _ := json.Marshal(map[string]string{
-			key: value,
+			keyValue.Key: keyValue.Value,
 		})
 		// Write JSON string to file.
-		intermediateFile, _ := os.OpenFile(fileName, os.O_RDWR|os.O_APPEND, 0666)
+		intermediateFile, _ := os.OpenFile(fileName, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 		intermediateFile.WriteString(string(jsonBytes) + "\n")
 		intermediateFile.Close()
 	}
