@@ -29,10 +29,12 @@ var States = struct {
 	Follower  string
 	Candidate string
 	Leader    string
+	Stopped   string
 }{
 	Follower:  "Follower",
 	Candidate: "Candidate",
 	Leader:    "Leader",
+	Stopped:   "Stopped",
 }
 
 // import "bytes"
@@ -55,12 +57,20 @@ type LogEntry struct {
 	Command interface{}
 }
 
+type Peer struct {
+	*labrpc.ClientEnd
+}
+
+func (peer *Peer) startHeartBeat() {
+
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
 	mu        sync.Mutex
-	peers     []*labrpc.ClientEnd
+	peers     []Peer
 	persister *Persister
 	me        int // index into peers[]
 
@@ -69,6 +79,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 	currentTerm int
 	votedFor    int
+	leader      int
 	log         []LogEntry
 	commitIndex int
 	lastApplied int
@@ -86,7 +97,27 @@ type Raft struct {
 	lastLeaderHeartBeatSent time.Time
 	leaderHeartBeatInterval time.Duration
 
-	sigKill bool
+	eventChan   chan ev
+	stoppedChan chan bool
+}
+
+// An internal event to be processed by the server's event loop.
+type ev struct {
+	target      interface{}
+	returnValue interface{}
+	c           chan error
+}
+
+func (rf *Raft) Leader() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.leader
+}
+
+func (rf *Raft) SetLeader(leader int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.leader = leader
 }
 
 func (rf *Raft) State() string {
@@ -177,7 +208,7 @@ func (rf *Raft) Me() int {
 	return rf.me
 }
 
-func (rf *Raft) Peers() []*labrpc.ClientEnd {
+func (rf *Raft) Peers() []Peer {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.peers
@@ -273,6 +304,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 		rf.SetVotedFor(args.CandidateId)
 	}
+
 	return
 }
 
@@ -291,6 +323,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Term = rf.CurrentTerm() //todo when do we set this to me.currentTerm?
 		return
 	}
+
 	//another leader has been elected, follow it
 	rf.SetState(States.Follower)
 	rf.SetCurrentTerm(args.Term)
@@ -323,6 +356,22 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendRequestVote2(server int, responseChan chan *RequestVoteReply) bool {
+	requestVoteArgs := RequestVoteArgs{
+		Term:        rf.CurrentTerm(),
+		CandidateId: rf.Me(),
+		// LastLogIndex: lastLogIndex,
+		LastLogTerm: rf.CurrentTerm(), //todo is this the right value?//todo should be lastLog.term
+	}
+	reply := &RequestVoteReply{}
+
+	ok := rf.peers[server].Call("Raft.RequestVote", requestVoteArgs, reply)
+	if ok {
+		responseChan <- reply
+	}
 	return ok
 }
 
@@ -361,10 +410,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	//currently just kills heartbeat process
-	rf.mu.Lock()
-	rf.sigKill = true
-	rf.mu.Unlock()
+	rf.stoppedChan <- true
 }
 
 //
@@ -381,7 +427,12 @@ func (rf *Raft) Kill() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
-	rf.peers = peers
+
+	rf.peers = []Peer{}
+	for _, peer := range peers {
+		rf.peers = append(rf.peers, Peer{peer})
+	}
+
 	rf.persister = persister
 	rf.me = me
 	rf.commitIndex = 0
@@ -401,6 +452,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//start heartbeat monitor
 	go func() {
+		// rf.loop()
 		rf.startHeartBeatTimeout()
 	}()
 
@@ -415,13 +467,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func (rf *Raft) startHeartBeatTimeout() {
 	fmt.Println("startHeartBeatTimeout")
 	for {
-		rf.mu.Lock()
-		kill := rf.sigKill
-		rf.mu.Unlock()
-		if kill {
-			fmt.Printf("recieved sigKill for server %v, killing heartbeat loop\n", rf.Me())
-			break
-		}
+
 		//todo should sleep this so it's not going crazy in the background
 		//todo need to timeout the election process as well
 		rf.mu.Lock()
@@ -519,7 +565,136 @@ func (rf *Raft) sendHeartBeat() {
 	}
 }
 
+// Waits for a random time between two durations and sends the current time on
+// the returned channel.
+func afterBetween(min time.Duration, max time.Duration) <-chan time.Time {
+	rand := rand.New(rand.NewSource(time.Now().UnixNano()))
+	d, delta := min, (max - min)
+	if delta > 0 {
+		d += time.Duration(rand.Int63n(int64(delta)))
+	}
+	return time.After(d)
+}
+
 func random(min, max int) int {
 	rand.Seed(time.Now().Unix())
 	return rand.Intn(max-min) + min
+}
+
+func (rf *Raft) loop() {
+	defer fmt.Printf("server %v exiting main loop", rf.me)
+
+	state := rf.State()
+
+	for state != States.Stopped {
+		switch state {
+		case States.Follower:
+			rf.followerLoop()
+		case States.Candidate:
+			rf.candidateLoop()
+		case States.Leader:
+			rf.leaderLoop()
+		case "Snapshotting":
+			//TODO
+		}
+		state = rf.State()
+	}
+}
+
+func (rf *Raft) followerLoop() {
+	electionTimeout := rf.ElectionTimeout()
+
+	timeoutChan := afterBetween(electionTimeout, electionTimeout*2)
+
+	for rf.State() == States.Follower {
+
+		select {
+		case <-rf.stoppedChan:
+			rf.SetState(States.Stopped)
+			return
+		case <-rf.eventChan:
+			//handle rpcs
+			//event := <-rf.eventChan
+		case <-timeoutChan:
+			rf.SetState(States.Candidate)
+		}
+
+		timeoutChan = afterBetween(electionTimeout, electionTimeout*2)
+	}
+}
+
+func (rf *Raft) candidateLoop() {
+	electionTimeout := rf.ElectionTimeout()
+
+	var timeoutChan <-chan time.Time
+	var responseChan chan *RequestVoteReply
+
+	doVote := true
+	voteCount := 0
+
+	for rf.State() == States.Candidate {
+		if doVote {
+			timeoutChan = afterBetween(electionTimeout, electionTimeout*2) //TODO this is probably the wrong constant
+			responseChan = make(chan *RequestVoteReply)
+
+			rf.SetCurrentTerm(rf.CurrentTerm() + 1)
+			rf.SetVotedFor(rf.me)
+			voteCount++
+
+			for peerIndex, _ := range rf.Peers() {
+				if peerIndex != rf.Me() {
+					//TODO:  should these be in parallel? probably, and probably need to cancel this loop and stuff if vote threshold is hit, or maybe check at timeout?
+					go func(index int) {
+						rf.sendRequestVote2(peerIndex, responseChan)
+					}(peerIndex)
+				}
+			}
+			doVote = false
+		}
+
+		if voteCount > len(rf.peers)/2 {
+			rf.SetState(States.Leader)
+			return
+		}
+
+		select {
+		case reply := <-responseChan:
+			if reply.VoteGranted {
+				voteCount++
+				//TODO: handle updating terms and stuff
+			}
+		case <-rf.stoppedChan:
+			rf.SetState(States.Stopped)
+			return
+		case <-rf.eventChan:
+			//handle returning rpcs
+			//event := <-rf.eventChan
+		case <-timeoutChan:
+			//timed out, start new election
+			doVote = true
+		}
+	}
+
+}
+
+func (rf *Raft) leaderLoop() {
+
+	//TODO: send initial empty append entries, leader has just been elected
+
+	for _, peer := range rf.peers {
+		peer.startHeartBeat()
+	}
+
+	for rf.State() == States.Leader {
+		select {
+		case <-rf.stoppedChan:
+			rf.SetState(States.Stopped)
+			//TODO: stop peer heartbeats too
+			//peer has start/stop heartbeat method that craetes or stops a ticker
+			return
+		case <-rf.eventChan:
+			//handle returning rpcs
+			//event := <-rf.eventChan
+		}
+	}
 }
