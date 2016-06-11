@@ -27,27 +27,6 @@ func mapF(document string, value string) (res []mapreduce.KeyValue) {
 	for i := 0; i < len(words); i++ {
 		keyValues = append(keyValues, mapreduce.KeyValue{words[i], ""})
 	}
-	/*
-	valueBytes := []byte(value)
-	word := ""
-	// Go through entire text byte by byte.
-	for i := 0; i < len(valueBytes); i++ {
-		// Check the rune to see if it's a letter.
-		// If it's not a letter, then word buffer is complete. Omit empty words.
-		// Add word and empty string as value into KeyValue instance.
-		// Value can be empty since only the number of items for the key will be returned.
-		// Next time, read the entire goddamn documentation:
-		// https://golang.org/pkg/strings/#FieldsFunc
-		if unicode.IsLetter(rune(valueBytes[i])) {
-			word += string(valueBytes[i])
-		} else {
-			if (len(word) >= 1) {
-				keyValues = append(keyValues, mapreduce.KeyValue{word, ""})
-			}
-			word = ""
-		}
-	}
-	*/
 	return keyValues
 }
 
