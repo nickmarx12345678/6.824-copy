@@ -57,14 +57,6 @@ type LogEntry struct {
 	Command interface{}
 }
 
-type Peer struct {
-	*labrpc.ClientEnd
-}
-
-func (peer *Peer) startHeartBeat() {
-
-}
-
 //
 // A Go object implementing a single Raft peer.
 //
@@ -105,7 +97,7 @@ type Raft struct {
 type ev struct {
 	target      interface{}
 	returnValue interface{}
-	c           chan error
+	c           chan interface{}
 }
 
 func (rf *Raft) Leader() int {
@@ -289,23 +281,42 @@ type AppendEntriesReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+	respChan := make(chan interface{})
+	event := ev{
+		target: args,
+		c:      respChan,
+	}
+	fmt.Printf("server %v received request vote request from server %v\n", rf.me, args.CandidateId)
+	rf.eventChan <- event
+
+	back := <-event.c
+
+	rep := back.(RequestVoteReply)
+
+	reply.Term = rep.Term
+	reply.VoteGranted = rep.VoteGranted
+
+	return
+}
+
+func (rf *Raft) processRequestVoteRequest(args RequestVoteArgs) RequestVoteReply {
+	reply := RequestVoteReply{}
 
 	if args.Term < rf.CurrentTerm() {
 		reply.VoteGranted = false
 		reply.Term = rf.CurrentTerm()
-		return
+		return reply
 	}
 
 	rf.SetCurrentTerm(args.Term)
 
 	if rf.VotedFor() == -1 {
 		reply.VoteGranted = true
-		reply.Term = args.Term //todo should this be +1?
+		reply.Term = args.Term
 
 		rf.SetVotedFor(args.CandidateId)
 	}
-
-	return
+	return reply
 }
 
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -355,11 +366,12 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	ok := rf.peers[server].Rpc.Call("Raft.RequestVote", args, reply)
 	return ok
 }
 
 func (rf *Raft) sendRequestVote2(server int, responseChan chan *RequestVoteReply) bool {
+	fmt.Printf("server %v sending request vote to server %v\n", rf.me, server)
 	requestVoteArgs := RequestVoteArgs{
 		Term:        rf.CurrentTerm(),
 		CandidateId: rf.Me(),
@@ -368,7 +380,7 @@ func (rf *Raft) sendRequestVote2(server int, responseChan chan *RequestVoteReply
 	}
 	reply := &RequestVoteReply{}
 
-	ok := rf.peers[server].Call("Raft.RequestVote", requestVoteArgs, reply)
+	ok := rf.peers[server].Rpc.Call("Raft.RequestVote", requestVoteArgs, reply)
 	if ok {
 		responseChan <- reply
 	}
@@ -376,7 +388,7 @@ func (rf *Raft) sendRequestVote2(server int, responseChan chan *RequestVoteReply
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	ok := rf.peers[server].Rpc.Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -429,8 +441,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 
 	rf.peers = []Peer{}
-	for _, peer := range peers {
-		rf.peers = append(rf.peers, Peer{peer})
+	for i, peer := range peers {
+		p := Peer{
+			Rpc:  peer,
+			mu:   sync.Mutex{},
+			me:   i,
+			raft: rf,
+		}
+		rf.peers = append(rf.peers, p)
 	}
 
 	rf.persister = persister
@@ -450,13 +468,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = States.Follower
 	rf.heartBeatInterval = time.Duration(15) * time.Millisecond
 
+	rf.eventChan = make(chan ev)
+
 	//start heartbeat monitor
 	go func() {
-		// rf.loop()
-		rf.startHeartBeatTimeout()
+		rf.loop()
 	}()
-
-	// Your initialization code here.
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -589,10 +606,13 @@ func (rf *Raft) loop() {
 	for state != States.Stopped {
 		switch state {
 		case States.Follower:
+			fmt.Printf("server %v entering follower loop\n", rf.me)
 			rf.followerLoop()
 		case States.Candidate:
+			fmt.Printf("server %v entering candidate loop\n", rf.me)
 			rf.candidateLoop()
 		case States.Leader:
+			fmt.Printf("server %v entering leader loop\n", rf.me)
 			rf.leaderLoop()
 		case "Snapshotting":
 			//TODO
@@ -612,9 +632,12 @@ func (rf *Raft) followerLoop() {
 		case <-rf.stoppedChan:
 			rf.SetState(States.Stopped)
 			return
-		case <-rf.eventChan:
-			//handle rpcs
-			//event := <-rf.eventChan
+		case event := <-rf.eventChan:
+			switch args := event.target.(type) {
+			case RequestVoteArgs:
+				reply := rf.processRequestVoteRequest(args)
+				event.c <- reply
+			}
 		case <-timeoutChan:
 			rf.SetState(States.Candidate)
 		}
@@ -645,7 +668,7 @@ func (rf *Raft) candidateLoop() {
 				if peerIndex != rf.Me() {
 					//TODO:  should these be in parallel? probably, and probably need to cancel this loop and stuff if vote threshold is hit, or maybe check at timeout?
 					go func(index int) {
-						rf.sendRequestVote2(peerIndex, responseChan)
+						rf.sendRequestVote2(index, responseChan)
 					}(peerIndex)
 				}
 			}
@@ -660,13 +683,21 @@ func (rf *Raft) candidateLoop() {
 		select {
 		case reply := <-responseChan:
 			if reply.VoteGranted {
+				fmt.Printf("server %v got vote\n", rf.me)
 				voteCount++
 				//TODO: handle updating terms and stuff
 			}
 		case <-rf.stoppedChan:
 			rf.SetState(States.Stopped)
 			return
-		case <-rf.eventChan:
+		case event := <-rf.eventChan:
+			switch args := event.target.(type) {
+			case RequestVoteArgs:
+				reply := rf.processRequestVoteRequest(args)
+				fmt.Printf("server %v processed request vote request", rf.me)
+				event.c <- reply
+			}
+
 			//handle returning rpcs
 			//event := <-rf.eventChan
 		case <-timeoutChan:
@@ -674,7 +705,18 @@ func (rf *Raft) candidateLoop() {
 			doVote = true
 		}
 	}
+}
 
+func (rf *Raft) sendHeartBeat2(serverIndex int) {
+	fmt.Printf("sending heart beat from server %v to server %v\n", rf.Me(), serverIndex)
+	//send empty hearthbeat to all other servers to indicate leader has been elected
+	appendEntriesArgs := AppendEntriesArgs{
+		Term:     rf.CurrentTerm(),
+		LeaderId: rf.Me(),
+	}
+
+	appendEntriesReply := &AppendEntriesReply{}
+	rf.sendAppendEntries(serverIndex, appendEntriesArgs, appendEntriesReply)
 }
 
 func (rf *Raft) leaderLoop() {
