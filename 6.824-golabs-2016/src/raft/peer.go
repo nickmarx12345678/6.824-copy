@@ -43,6 +43,7 @@ func (peer *Peer) startHeartBeat() {
 }
 
 func (peer *Peer) stopHeartBeat() {
+	peer.lastActivity = time.Time{}
 	peer.stopChan <- true
 }
 

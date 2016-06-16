@@ -289,7 +289,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	fmt.Printf("server %v received request vote request from server %v\n", rf.me, args.CandidateId)
 	rf.eventChan <- event
 
-	back := <-event.c
+	back := <-event.c //response from event processing in a given state
 
 	rep := back.(RequestVoteReply)
 
@@ -297,6 +297,47 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = rep.VoteGranted
 
 	return
+}
+
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	respChan := make(chan interface{})
+	event := ev{
+		target: args,
+		c:      respChan,
+	}
+
+	rf.eventChan <- event
+	back := <-event.c //response from event processing
+	rep := back.(AppendEntriesReply)
+
+	reply.Success = rep.Success
+	reply.Term = rep.Term
+
+	return
+}
+
+func (rf *Raft) processAppendEntriesRequest(args AppendEntriesArgs) AppendEntriesReply {
+	reply := AppendEntriesReply{
+		Success: true,
+		Term:    args.Term,
+	}
+
+	fmt.Printf("server %v received appendEntries from server %v stating term %v\n", rf.me, args.LeaderId, args.Term)
+	//reset heartBeatTimeout2
+	rf.peers[args.LeaderId].setLastActivity(time.Now())
+	rf.SetVotedFor(-1) //TODO: is this the right place to clear this
+
+	if args.Term < rf.CurrentTerm() {
+		fmt.Printf("append entries success == false, server %v with current term %v higher than term %v sent from server %v\n", rf.Me(), rf.CurrentTerm(), args.Term, args.LeaderId)
+		reply.Success = false
+		reply.Term = rf.CurrentTerm() //todo when do we set this to me.currentTerm?
+		return reply
+	}
+
+	//another leader has been elected, follow it
+	rf.SetState(States.Follower)
+	rf.SetCurrentTerm(args.Term)
+	return reply
 }
 
 func (rf *Raft) processRequestVoteRequest(args RequestVoteArgs) RequestVoteReply {
@@ -319,35 +360,6 @@ func (rf *Raft) processRequestVoteRequest(args RequestVoteArgs) RequestVoteReply
 	return reply
 }
 
-func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	fmt.Printf("server %v received appendEntries from server %v stating term %v\n", rf.me, args.LeaderId, args.Term)
-	//reset heartBeatTimeout2
-	rf.mu.Lock()
-	rf.lastHeartBeat = time.Now()
-	rf.mu.Unlock()
-
-	rf.SetVotedFor(-1) //TODO: is this the right place to clear this
-
-	if args.Term < rf.CurrentTerm() {
-		fmt.Printf("append entries success == false, server %v with current term %v higher than term %v sent from server %v\n", rf.Me(), rf.CurrentTerm(), args.Term, args.LeaderId)
-		reply.Success = false
-		reply.Term = rf.CurrentTerm() //todo when do we set this to me.currentTerm?
-		return
-	}
-
-	//another leader has been elected, follow it
-	rf.SetState(States.Follower)
-	rf.SetCurrentTerm(args.Term)
-
-	return
-
-	// if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-	// 	reply.Success = false
-	// 	// reply.Term = rf.currentTerm //todo ???
-	// 	return
-	// }
-}
-
 //
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
@@ -359,12 +371,6 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 // handler function (including whether they are pointers).
 //
 // returns true if labrpc says the RPC was delivered.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Rpc.Call("Raft.RequestVote", args, reply)
 	return ok
@@ -415,12 +421,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-//
-// the tester calls Kill() when a Raft instance won't
-// be needed again. you are not required to do anything
-// in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
-//
 func (rf *Raft) Kill() {
 	rf.stoppedChan <- true
 }
@@ -479,85 +479,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
-}
-
-func (rf *Raft) startHeartBeatTimeout() {
-	fmt.Println("startHeartBeatTimeout")
-	for {
-
-		//todo should sleep this so it's not going crazy in the background
-		//todo need to timeout the election process as well
-		rf.mu.Lock()
-		heartBeatTimeoutTime := rf.lastHeartBeat.Add(rf.heartBeatTimeout)
-
-		//leader must send heartbeat to followers every X amount of time
-		sendHeartBeat := rf.state == States.Leader && time.Now().After(rf.lastLeaderHeartBeatSent.Add(rf.heartBeatInterval))
-		rf.mu.Unlock()
-
-		if sendHeartBeat {
-			rf.sendHeartBeat()
-			continue
-		}
-
-		//TODO second half relies on short circuiting, should be better
-		heartBeatTimedOut := (rf.State() == States.Follower && time.Now().After(heartBeatTimeoutTime)) || (rf.State() == States.Candidate && time.Now().After(rf.getRequestVoteTimeout()))
-		if heartBeatTimedOut {
-
-			if rf.State() == States.Follower && time.Now().After(heartBeatTimeoutTime) {
-				fmt.Printf("heartbeat timed out for server %v\n", rf.Me())
-			}
-
-			if rf.state == States.Candidate && time.Now().After(rf.getRequestVoteTimeout()) {
-				fmt.Printf("requestVote timed out for server %v\n", rf.Me())
-			}
-
-			//increment term and transition to candidate state per 5.2
-			rf.SetCurrentTerm(rf.CurrentTerm() + 1)
-			rf.SetState(States.Candidate)
-			//initiate election
-			// lastLogIndex := len(rf.log) - 1 //todo what if this is empty?
-			// lastLog := rf.log[lastLogIndex]
-
-			//TODO should these be constant for each request or should we recheck pre each-rpc, probably former
-			requestVoteArgs := RequestVoteArgs{
-				Term:        rf.CurrentTerm(),
-				CandidateId: rf.Me(),
-				// LastLogIndex: lastLogIndex,
-				LastLogTerm: rf.CurrentTerm(), //todo is this the right value?//todo should be lastLog.term
-			}
-
-			rf.mu.Lock()
-			//start timeout for requestvote
-			rf.lastRequestVote = time.Now()
-			rf.mu.Unlock()
-
-			fmt.Printf("server %v initiating request vote\n", rf.Me())
-
-			voteCount := 0
-			for serverIndex := 0; serverIndex < len(rf.Peers()); serverIndex++ {
-				requestVoteReply := &RequestVoteReply{}
-				if serverIndex != rf.Me() {
-					//todo should these be in parallel? probably, and probably need to cancel this loop and stuff if vote threshold is hit, or maybe check at timeout?
-					ok := rf.sendRequestVote(serverIndex, requestVoteArgs, requestVoteReply)
-					if !ok {
-						fmt.Printf("not ok sending request vote to server %v from server %v, appears to be down\n", serverIndex, rf.me)
-					}
-
-					//TODO: should ensure late rpc's dont mess with state once leader is already decided
-					if requestVoteReply.VoteGranted {
-						voteCount += 1
-						fmt.Printf("server %v received vote, vote count: %v\n", rf.Me(), voteCount)
-					}
-					if voteCount > len(rf.peers)/2 {
-						fmt.Printf("server %v elected leader\n", rf.Me())
-						fmt.Printf("server %v setting new term to %v\n", rf.Me(), rf.CurrentTerm())
-						rf.SetState(States.Leader)
-						rf.sendHeartBeat()
-					}
-				}
-			}
-		}
-	}
 }
 
 func (rf *Raft) getRequestVoteTimeout() time.Time {
@@ -635,8 +556,9 @@ func (rf *Raft) followerLoop() {
 		case event := <-rf.eventChan:
 			switch args := event.target.(type) {
 			case RequestVoteArgs:
-				reply := rf.processRequestVoteRequest(args)
-				event.c <- reply
+				event.c <- rf.processRequestVoteRequest(args)
+			case AppendEntriesArgs:
+				event.c <- rf.processAppendEntriesRequest(args)
 			}
 		case <-timeoutChan:
 			rf.SetState(States.Candidate)
@@ -693,16 +615,36 @@ func (rf *Raft) candidateLoop() {
 		case event := <-rf.eventChan:
 			switch args := event.target.(type) {
 			case RequestVoteArgs:
-				reply := rf.processRequestVoteRequest(args)
-				fmt.Printf("server %v processed request vote request", rf.me)
-				event.c <- reply
+				event.c <- rf.processRequestVoteRequest(args)
+			case AppendEntriesArgs:
+				event.c <- rf.processAppendEntriesRequest(args)
 			}
-
-			//handle returning rpcs
-			//event := <-rf.eventChan
 		case <-timeoutChan:
 			//timed out, start new election
 			doVote = true
+		}
+	}
+}
+
+func (rf *Raft) leaderLoop() {
+
+	//TODO: send initial empty append entries, leader has just been elected
+
+	for _, peer := range rf.peers {
+		fmt.Printf("server %v starting heartbeat for server %v\n", rf.me, peer.me)
+		peer.startHeartBeat()
+	}
+
+	for rf.State() == States.Leader {
+		select {
+		case <-rf.stoppedChan:
+			rf.SetState(States.Stopped)
+			//TODO: stop peer heartbeats too
+			//peer has start/stop heartbeat method that craetes or stops a ticker
+			return
+		case <-rf.eventChan:
+			//handle returning rpcs
+			//event := <-rf.eventChan
 		}
 	}
 }
@@ -719,24 +661,122 @@ func (rf *Raft) sendHeartBeat2(serverIndex int) {
 	rf.sendAppendEntries(serverIndex, appendEntriesArgs, appendEntriesReply)
 }
 
-func (rf *Raft) leaderLoop() {
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
 
-	//TODO: send initial empty append entries, leader has just been elected
+func (rf *Raft) startHeartBeatTimeout() {
+	fmt.Println("startHeartBeatTimeout")
+	for {
 
-	for _, peer := range rf.peers {
-		peer.startHeartBeat()
-	}
+		//todo should sleep this so it's not going crazy in the background
+		//todo need to timeout the election process as well
+		rf.mu.Lock()
+		heartBeatTimeoutTime := rf.lastHeartBeat.Add(rf.heartBeatTimeout)
 
-	for rf.State() == States.Leader {
-		select {
-		case <-rf.stoppedChan:
-			rf.SetState(States.Stopped)
-			//TODO: stop peer heartbeats too
-			//peer has start/stop heartbeat method that craetes or stops a ticker
-			return
-		case <-rf.eventChan:
-			//handle returning rpcs
-			//event := <-rf.eventChan
+		//leader must send heartbeat to followers every X amount of time
+		sendHeartBeat := rf.state == States.Leader && time.Now().After(rf.lastLeaderHeartBeatSent.Add(rf.heartBeatInterval))
+		rf.mu.Unlock()
+
+		if sendHeartBeat {
+			rf.sendHeartBeat()
+			continue
+		}
+
+		//TODO second half relies on short circuiting, should be better
+		heartBeatTimedOut := (rf.State() == States.Follower && time.Now().After(heartBeatTimeoutTime)) || (rf.State() == States.Candidate && time.Now().After(rf.getRequestVoteTimeout()))
+		if heartBeatTimedOut {
+
+			if rf.State() == States.Follower && time.Now().After(heartBeatTimeoutTime) {
+				fmt.Printf("heartbeat timed out for server %v\n", rf.Me())
+			}
+
+			if rf.state == States.Candidate && time.Now().After(rf.getRequestVoteTimeout()) {
+				fmt.Printf("requestVote timed out for server %v\n", rf.Me())
+			}
+
+			//increment term and transition to candidate state per 5.2
+			rf.SetCurrentTerm(rf.CurrentTerm() + 1)
+			rf.SetState(States.Candidate)
+			//initiate election
+			// lastLogIndex := len(rf.log) - 1 //todo what if this is empty?
+			// lastLog := rf.log[lastLogIndex]
+
+			//TODO should these be constant for each request or should we recheck pre each-rpc, probably former
+			requestVoteArgs := RequestVoteArgs{
+				Term:        rf.CurrentTerm(),
+				CandidateId: rf.Me(),
+				// LastLogIndex: lastLogIndex,
+				LastLogTerm: rf.CurrentTerm(), //todo is this the right value?//todo should be lastLog.term
+			}
+
+			rf.mu.Lock()
+			//start timeout for requestvote
+			rf.lastRequestVote = time.Now()
+			rf.mu.Unlock()
+
+			fmt.Printf("server %v initiating request vote\n", rf.Me())
+
+			voteCount := 0
+			for serverIndex := 0; serverIndex < len(rf.Peers()); serverIndex++ {
+				requestVoteReply := &RequestVoteReply{}
+				if serverIndex != rf.Me() {
+					//todo should these be in parallel? probably, and probably need to cancel this loop and stuff if vote threshold is hit, or maybe check at timeout?
+					ok := rf.sendRequestVote(serverIndex, requestVoteArgs, requestVoteReply)
+					if !ok {
+						fmt.Printf("not ok sending request vote to server %v from server %v, appears to be down\n", serverIndex, rf.me)
+					}
+
+					//TODO: should ensure late rpc's dont mess with state once leader is already decided
+					if requestVoteReply.VoteGranted {
+						voteCount += 1
+						fmt.Printf("server %v received vote, vote count: %v\n", rf.Me(), voteCount)
+					}
+					if voteCount > len(rf.peers)/2 {
+						fmt.Printf("server %v elected leader\n", rf.Me())
+						fmt.Printf("server %v setting new term to %v\n", rf.Me(), rf.CurrentTerm())
+						rf.SetState(States.Leader)
+						rf.sendHeartBeat()
+					}
+				}
+			}
 		}
 	}
 }
