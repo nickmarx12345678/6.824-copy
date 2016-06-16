@@ -440,13 +440,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 
+	rf.heartBeatInterval = time.Duration(15) * time.Millisecond
+
 	rf.peers = []Peer{}
 	for i, peer := range peers {
 		p := Peer{
-			Rpc:  peer,
-			mu:   sync.Mutex{},
-			me:   i,
-			raft: rf,
+			Rpc:               peer,
+			mu:                sync.Mutex{},
+			me:                i,
+			raft:              rf,
+			heartBeatInterval: rf.heartBeatInterval,
 		}
 		rf.peers = append(rf.peers, p)
 	}
@@ -466,7 +469,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.electionTimeout = time.Duration(random(150, 300)) * time.Millisecond //TODO: does this need to be random? if so what range
 	rf.state = States.Follower
-	rf.heartBeatInterval = time.Duration(15) * time.Millisecond
 
 	rf.eventChan = make(chan ev)
 
