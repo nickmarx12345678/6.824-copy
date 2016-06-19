@@ -34,7 +34,7 @@ func getWordCountFromBytes(bytes []byte) map[string]int {
 }
 
 func prettyPrint(data map[string]int) string {
-	x, _ :=json.MarshalIndent(data, "", "    ")
+	x, _ := json.MarshalIndent(data, "", "    ")
 	return string(x)
 	/*
 	output := ""
