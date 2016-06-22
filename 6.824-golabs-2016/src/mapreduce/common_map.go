@@ -2,12 +2,10 @@ package mapreduce
 
 import (
 	"encoding/json"
-	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"math"
 	"os"
-	"strconv"
 )
 
 // doMap does the job of a map worker: it reads one of the input files
@@ -49,8 +47,6 @@ func doMap(
 	fileContents, _ := ioutil.ReadFile(inFile)
 	keyValues := mapF(inFile, string(fileContents))
 	// Iterate through key: value pairs.
-	fmt.Println("MAPPING")
-	fmt.Println("MAPPING " + strconv.Itoa(len(keyValues)))
 	for i := 0; i < len(keyValues); i++ {
 		keyValue := keyValues[i]
 		// Hash the key string, mod nReduce to come up with r.
@@ -66,7 +62,6 @@ func doMap(
 		intermediateFile.WriteString(string(jsonBytes) + "\n")
 		intermediateFile.Close()
 	}
-	fmt.Println("MAP COMPLETE")
 }
 
 func ihash(s string) uint32 {

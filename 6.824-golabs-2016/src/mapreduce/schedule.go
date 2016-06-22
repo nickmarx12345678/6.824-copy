@@ -2,7 +2,6 @@ package mapreduce
 
 import (
 	"fmt"
-	//"strconv"
 )
 
 // schedule starts and waits for all tasks in the given phase (Map or Reduce).
@@ -31,33 +30,36 @@ func (mr *Master) schedule(phase jobPhase) {
 	switch phase {
 	case mapPhase:
 		for fileIndex, fileName := range mr.files {
-				// Schedule work to be done:
-				mapArgs := new(DoTaskArgs)
-				mapArgs.JobName = mr.jobName
-				mapArgs.File = fileName
-				mapArgs.Phase = phase
-				mapArgs.TaskNumber = fileIndex
-				mapArgs.NumOtherPhase = nios
-				go func() {
-					workerName := <- mr.registerChannel
-					fmt.Println("MAP " + workerName)
-					call(workerName, "Worker.DoTask", mapArgs, new(struct{}))
-				}()
+			// Schedule work to be done:
+			mapArgs := new(DoTaskArgs)
+			mapArgs.JobName = mr.jobName
+			mapArgs.File = fileName
+			mapArgs.Phase = phase
+			mapArgs.TaskNumber = fileIndex
+			mapArgs.NumOtherPhase = nios
+			// Wait for worker to be ready.
+			workerName := <- mr.registerChannel
+			// Schedule work for the worker.
+			go func() {
+				call(workerName, "Worker.DoTask", mapArgs, new(struct{}))
+				mr.registerChannel <- workerName
+			}()
 		}
 	case reducePhase:
 		for i := 0; i < ntasks; i++ {
-				// Schedule work to be done:
-				reduceArgs := new(DoTaskArgs)
-				reduceArgs.JobName = mr.jobName
-				reduceArgs.Phase = phase
-				reduceArgs.TaskNumber = i
-				reduceArgs.NumOtherPhase = nios
-				//fmt.Println(reduceArgs.JobName)
-				go func() {
-					workerName := <- mr.registerChannel
-					call(workerName, "Worker.DoTask", reduceArgs, new(struct{}))
-					mr.registerChannel <- workerName
-				}()
+			// Schedule work to be done:
+			reduceArgs := new(DoTaskArgs)
+			reduceArgs.JobName = mr.jobName
+			reduceArgs.Phase = phase
+			reduceArgs.TaskNumber = i
+			reduceArgs.NumOtherPhase = nios
+			// Wait for worker to be ready.
+			workerName := <- mr.registerChannel
+			// Schedule work for the worker.
+			go func() {
+				call(workerName, "Worker.DoTask", reduceArgs, new(struct{}))
+				mr.registerChannel <- workerName
+			}()
 		}
 	}
 	fmt.Printf("Schedule: %v phase done\n", phase)
