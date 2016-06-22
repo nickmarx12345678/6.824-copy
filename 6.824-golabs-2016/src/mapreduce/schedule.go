@@ -31,14 +31,15 @@ func (mr *Master) schedule(phase jobPhase) {
 	case mapPhase:
 		for fileIndex, fileName := range mr.files {
 			// Schedule work to be done:
-			mapArgs := new(DoTaskArgs)
-			mapArgs.JobName = mr.jobName
-			mapArgs.File = fileName
-			mapArgs.Phase = phase
-			mapArgs.TaskNumber = fileIndex
-			mapArgs.NumOtherPhase = nios
+			mapArgs := DoTaskArgs{
+				JobName:       mr.jobName,
+				File:          fileName,
+				Phase:         phase,
+				TaskNumber:    fileIndex,
+				NumOtherPhase: nios,
+			}
 			// Wait for worker to be ready.
-			workerName := <- mr.registerChannel
+			workerName := <-mr.registerChannel
 			// Schedule work for the worker.
 			go func() {
 				call(workerName, "Worker.DoTask", mapArgs, new(struct{}))
@@ -48,13 +49,14 @@ func (mr *Master) schedule(phase jobPhase) {
 	case reducePhase:
 		for i := 0; i < ntasks; i++ {
 			// Schedule work to be done:
-			reduceArgs := new(DoTaskArgs)
-			reduceArgs.JobName = mr.jobName
-			reduceArgs.Phase = phase
-			reduceArgs.TaskNumber = i
-			reduceArgs.NumOtherPhase = nios
+			reduceArgs := DoTaskArgs{
+				JobName:       mr.jobName,
+				Phase:         phase,
+				TaskNumber:    i,
+				NumOtherPhase: nios,
+			}
 			// Wait for worker to be ready.
-			workerName := <- mr.registerChannel
+			workerName := <-mr.registerChannel
 			// Schedule work for the worker.
 			go func() {
 				call(workerName, "Worker.DoTask", reduceArgs, new(struct{}))
