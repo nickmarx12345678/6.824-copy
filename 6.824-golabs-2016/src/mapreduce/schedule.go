@@ -41,10 +41,7 @@ func (mr *Master) schedule(phase jobPhase) {
 			// Wait for worker to be ready.
 			workerName := <-mr.registerChannel
 			// Schedule work for the worker.
-			go func() {
-				call(workerName, "Worker.DoTask", mapArgs, new(struct{}))
-				mr.registerChannel <- workerName
-			}()
+			go scheduleTask(mr, workerName, mapArgs)
 		}
 	case reducePhase:
 		for i := 0; i < ntasks; i++ {
@@ -58,11 +55,23 @@ func (mr *Master) schedule(phase jobPhase) {
 			// Wait for worker to be ready.
 			workerName := <-mr.registerChannel
 			// Schedule work for the worker.
-			go func() {
-				call(workerName, "Worker.DoTask", reduceArgs, new(struct{}))
-				mr.registerChannel <- workerName
-			}()
+			go scheduleTask(mr, workerName, reduceArgs)
 		}
 	}
 	fmt.Printf("Schedule: %v phase done\n", phase)
+}
+
+// This function is split out in order to handle recursion.
+// Attempted to format as while loop but didn't work because recovery calls aren't goroutines.
+func scheduleTask(mr *Master, workerName string, args DoTaskArgs) {
+	ok := call(workerName, "Worker.DoTask", args, new(struct{}))
+	// Check to see if the result of the call was good.
+	// If good, then put worker back into the channel. It's ready for next task.
+	// If not good, then wait for another worker and try again via recursive call.
+	if ok == true {
+		mr.registerChannel <- workerName
+	} else {
+		workerName := <-mr.registerChannel
+		go scheduleTask(mr, workerName, args)
+	}
 }
