@@ -23,7 +23,7 @@ func mapF(document string, value string) (res []mapreduce.KeyValue) {
 	// Iterate through each word.
 	// Add word and empty string as value into KeyValue instance.
 	// Value can be empty since only the number of items for the key will be returned.
-	keyValues := make([]mapreduce.KeyValue, 100)
+	keyValues := make([]mapreduce.KeyValue, 0)
 	for i := 0; i < len(words); i++ {
 		keyValues = append(keyValues, mapreduce.KeyValue{words[i], ""})
 	}
