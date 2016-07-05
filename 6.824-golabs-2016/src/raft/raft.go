@@ -20,7 +20,9 @@ package raft
 import (
 	"fmt"
 	"labrpc"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 // import "bytes"
@@ -58,20 +60,22 @@ type Raft struct {
 	isLeader      bool
 	nextIndex     []int
 	matchIndex    []int
+	// DEBUG
+	receivedHeartbeat bool
 }
 
 type AppendEntries struct {
-	term         int
-	leaderID     int
-	prevLogIndex int
-	prevLogTerm  int
-	entries      []*ApplyMsg
-	leaderCommit []int
+	Term         int
+	LeaderID     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []*ApplyMsg
+	LeaderCommit []int
 }
 
 type AppendEntriesReply struct {
-	term    int
-	success bool
+	Term    int
+	Success bool
 }
 
 // return currentTerm and whether this server
@@ -132,6 +136,8 @@ type RequestVoteReply struct {
 	// Your data here.
 	Term        int
 	VoteGranted bool
+	// DEBUG
+	FollowerID int
 }
 
 //
@@ -139,8 +145,9 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
-	//fmt.Println("Terms:", args.Term, rf.currentTerm)
-	if !rf.votedFor && args.Term >= rf.currentTerm {
+	reply.Term = rf.currentTerm
+	reply.FollowerID = rf.me
+	if !rf.votedFor {
 		reply.VoteGranted = true
 		rf.votedFor = true
 	}
@@ -165,6 +172,25 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) ProcessAppendEntries(args AppendEntries, reply *AppendEntriesReply) {
+	//fmt.Println("Received heartbeat", args.LeaderID, "to", rf.me)
+	rf.receivedHeartbeat = true
+	reply.Term = args.Term
+	reply.Success = true
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+	}
+}
+
+func (rf *Raft) sendAppendEntries(
+	server int,
+	args AppendEntries,
+	reply *AppendEntriesReply) bool {
+	//fmt.Println(args)
+	ok := rf.peers[server].Call("Raft.ProcessAppendEntries", args, reply)
 	return ok
 }
 
@@ -219,7 +245,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here.
 	// Initialize timer for recognizing heartbeats.
-	rf.startHeartbeatListener()
+	go rf.listenForHeartbeat()
 	// Handle heartbeat by processing AppendEntries from leader.
 	// If no AppendEntries received, start election.
 	// Call sendRequestVote() to each of the other peers.
@@ -232,18 +258,42 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func (rf *Raft) startHeartbeatListener() {
-	fmt.Println("Started follower state for server", rf.me)
-	rf.startElection()
+func (rf *Raft) listenForHeartbeat() {
+	//fmt.Println("Listening to heartbeat", rf.me)
+	rf.receivedHeartbeat = false
+	timeout := time.Duration(rand.Intn(100) + 100)
+	time.Sleep(timeout * time.Millisecond)
+	if !rf.receivedHeartbeat {
+		fmt.Println("Leader election", rf.me)
+		rf.startElection()
+	} else {
+		go rf.listenForHeartbeat()
+	}
 }
 
-func (rf *Raft) startHeartbeat() {
+func (rf *Raft) sendHeartbeat() {
+	appendEntries := AppendEntries{
+		Term:         rf.currentTerm,
+		LeaderID:     rf.me,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+	}
+	reply := AppendEntriesReply{}
+	for x := 0; x < len(rf.peers); x++ {
+		if x == rf.me {
+			continue
+		}
+		//fmt.Println("Sending heartbeat", rf.me, "to", x)
+		rf.sendAppendEntries(x, appendEntries, &reply)
+	}
+	time.Sleep(50 * time.Millisecond)
+	go rf.sendHeartbeat()
 }
 
 func (rf *Raft) startElection() {
 	rf.currentTerm++
 	rf.votedFor = true
-	numVotes := 1
+	numVotes := 0
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateID:  rf.me,
@@ -258,9 +308,12 @@ func (rf *Raft) startElection() {
 		rf.sendRequestVote(x, args, &reply)
 		if reply.VoteGranted {
 			numVotes++
+			fmt.Println(rf.me, reply.FollowerID)
 		}
 	}
 	if numVotes > len(rf.peers)/2 {
 		rf.isLeader = true
+		fmt.Println("Server", rf.me, "elected as leader.")
+		rf.sendHeartbeat()
 	}
 }
