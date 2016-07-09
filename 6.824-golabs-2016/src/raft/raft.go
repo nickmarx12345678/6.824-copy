@@ -146,6 +146,10 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
 	reply.Term = rf.currentTerm
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.votedFor = false
+	}
 	reply.FollowerID = rf.me
 	if !rf.votedFor {
 		reply.VoteGranted = true
@@ -264,6 +268,7 @@ func (rf *Raft) listenForHeartbeat() {
 	timeout := time.Duration(rand.Intn(100) + 100)
 	time.Sleep(timeout * time.Millisecond)
 	if !rf.receivedHeartbeat {
+		//time.Sleep(200 * time.Millisecond)
 		fmt.Println("Leader election", rf.me)
 		rf.startElection()
 	} else {
@@ -292,6 +297,7 @@ func (rf *Raft) sendHeartbeat() {
 
 func (rf *Raft) startElection() {
 	rf.currentTerm++
+	fmt.Println("Server", rf.me, "moved to term", rf.currentTerm)
 	rf.votedFor = true
 	numVotes := 0
 	args := RequestVoteArgs{
@@ -306,14 +312,23 @@ func (rf *Raft) startElection() {
 			continue
 		}
 		rf.sendRequestVote(x, args, &reply)
+		if reply.Term >= rf.currentTerm {
+			fmt.Println("Candidate", rf.me, "standing down from", reply.FollowerID)
+			rf.isLeader = false
+			go rf.listenForHeartbeat()
+			return
+		}
 		if reply.VoteGranted {
 			numVotes++
-			fmt.Println(rf.me, reply.FollowerID)
+			fmt.Println("Vote granted to", rf.me, "from", reply.FollowerID)
 		}
 	}
 	if numVotes > len(rf.peers)/2 {
 		rf.isLeader = true
 		fmt.Println("Server", rf.me, "elected as leader.")
-		rf.sendHeartbeat()
+		go rf.sendHeartbeat()
+	} else {
+		rf.isLeader = false
+		go rf.listenForHeartbeat()
 	}
 }
