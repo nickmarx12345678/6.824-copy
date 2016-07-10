@@ -28,6 +28,10 @@ import (
 // import "bytes"
 // import "encoding/gob"
 
+func debug() bool {
+	return false
+}
+
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -147,8 +151,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.votedFor = false
+		rf.increaseTerm(args.Term)
+		rf.isLeader = false
 	}
 	reply.FollowerID = rf.me
 	if !rf.votedFor {
@@ -185,7 +189,11 @@ func (rf *Raft) ProcessAppendEntries(args AppendEntries, reply *AppendEntriesRep
 	reply.Term = args.Term
 	reply.Success = true
 	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
+		rf.increaseTerm(args.Term)
+		rf.isLeader = false
+	}
+	if args.Term >= rf.currentTerm {
+		rf.isLeader = false
 	}
 }
 
@@ -262,21 +270,45 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
+func (rf *Raft) increaseTerm(term int) {
+	rf.currentTerm = term
+	rf.votedFor = false
+}
+
+func (rf *Raft) changeToFollower() {
+	if debug() {
+		fmt.Println("Changing to follower", rf.me)
+	}
+	rf.isLeader = false
+}
+
+func (rf *Raft) changeToLeader() {
+	if debug() {
+		fmt.Println("Changing to leader", rf.me)
+	}
+	rf.isLeader = true
+}
+
 func (rf *Raft) listenForHeartbeat() {
-	//fmt.Println("Listening to heartbeat", rf.me)
 	rf.receivedHeartbeat = false
 	timeout := time.Duration(rand.Intn(100) + 100)
+	timeout = time.Duration(100)
 	time.Sleep(timeout * time.Millisecond)
-	if !rf.receivedHeartbeat {
-		//time.Sleep(200 * time.Millisecond)
-		fmt.Println("Leader election", rf.me)
-		rf.startElection()
-	} else {
-		go rf.listenForHeartbeat()
+	if !rf.isLeader && !rf.receivedHeartbeat {
+		timeout = time.Duration(rand.Intn(200) + 150)
+		time.Sleep(timeout * time.Millisecond)
+		if debug() {
+			fmt.Println("Leader election", rf.me)
+		}
+		go rf.startElection()
 	}
+	go rf.listenForHeartbeat()
 }
 
 func (rf *Raft) sendHeartbeat() {
+	if !rf.isLeader {
+		return
+	}
 	appendEntries := AppendEntries{
 		Term:         rf.currentTerm,
 		LeaderID:     rf.me,
@@ -296,10 +328,12 @@ func (rf *Raft) sendHeartbeat() {
 }
 
 func (rf *Raft) startElection() {
-	rf.currentTerm++
-	fmt.Println("Server", rf.me, "moved to term", rf.currentTerm)
+	rf.increaseTerm(rf.currentTerm + 1)
+	if debug() {
+		fmt.Println("Server", rf.me, "moved to term", rf.currentTerm)
+	}
 	rf.votedFor = true
-	numVotes := 0
+	numVotes := 1
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateID:  rf.me,
@@ -313,19 +347,25 @@ func (rf *Raft) startElection() {
 		}
 		rf.sendRequestVote(x, args, &reply)
 		if reply.Term >= rf.currentTerm {
-			fmt.Println("Candidate", rf.me, "standing down from", reply.FollowerID)
+			if debug() {
+				fmt.Println("Candidate", rf.me, "standing down from", reply.FollowerID)
+			}
 			rf.isLeader = false
 			go rf.listenForHeartbeat()
 			return
 		}
 		if reply.VoteGranted {
 			numVotes++
-			fmt.Println("Vote granted to", rf.me, "from", reply.FollowerID)
+			if debug() {
+				fmt.Println("Vote granted to", rf.me, "from", reply.FollowerID)
+			}
 		}
 	}
 	if numVotes > len(rf.peers)/2 {
 		rf.isLeader = true
-		fmt.Println("Server", rf.me, "elected as leader.")
+		if debug() {
+			fmt.Println("Server", rf.me, "elected as leader.")
+		}
 		go rf.sendHeartbeat()
 	} else {
 		rf.isLeader = false
