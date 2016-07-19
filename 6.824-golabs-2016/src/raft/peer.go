@@ -49,6 +49,9 @@ func (peer *Peer) stopHeartBeat() {
 
 func (peer *Peer) heartBeat() {
 	//c <- true TODO
+	if peer.me == peer.raft.me {
+		panic(fmt.Sprintf("peer %v: has same id as peer.raft.me", peer.me))
+	}
 
 	ticker := time.Tick(peer.heartBeatInterval)
 

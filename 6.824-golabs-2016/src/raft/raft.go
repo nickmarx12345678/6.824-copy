@@ -62,7 +62,7 @@ type LogEntry struct {
 //
 type Raft struct {
 	mu        sync.Mutex
-	peers     []Peer
+	peers     []*Peer
 	persister *Persister
 	me        int // index into peers[]
 
@@ -200,7 +200,7 @@ func (rf *Raft) Me() int {
 	return rf.me
 }
 
-func (rf *Raft) Peers() []Peer {
+func (rf *Raft) Peers() []*Peer {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.peers
@@ -442,15 +442,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.heartBeatInterval = time.Duration(15) * time.Millisecond
 
-	rf.peers = []Peer{}
+	rf.peers = []*Peer{}
 	for i, peer := range peers {
-		p := Peer{
+		p := &Peer{
 			Rpc:               peer,
 			mu:                sync.Mutex{},
 			me:                i,
 			raft:              rf,
 			heartBeatInterval: rf.heartBeatInterval,
 		}
+		fmt.Printf("creating peer for raft id: %v with peer_id: %v\n", me, i)
 		rf.peers = append(rf.peers, p)
 	}
 
@@ -633,16 +634,23 @@ func (rf *Raft) leaderLoop() {
 	//TODO: send initial empty append entries, leader has just been elected
 
 	for _, peer := range rf.peers {
-		fmt.Printf("server %v starting heartbeat for server %v\n", rf.me, peer.me)
-		peer.startHeartBeat()
+		//dont send self heart beat
+		if peer.me != rf.me {
+			fmt.Printf("server %v starting heartbeat for server %v\n", rf.Me(), peer.me)
+			peer.startHeartBeat()
+		}
 	}
 
 	for rf.State() == States.Leader {
 		select {
 		case <-rf.stoppedChan:
 			rf.SetState(States.Stopped)
-			//TODO: stop peer heartbeats too
-			//peer has start/stop heartbeat method that craetes or stops a ticker
+			for _, peer := range rf.peers {
+				//dont send self heart beat
+				if peer.me != rf.me {
+					peer.stopHeartBeat()
+				}
+			}
 			return
 		case <-rf.eventChan:
 			//handle returning rpcs
@@ -652,7 +660,7 @@ func (rf *Raft) leaderLoop() {
 }
 
 func (rf *Raft) sendHeartBeat2(serverIndex int) {
-	fmt.Printf("sending heart beat from server %v to server %v\n", rf.Me(), serverIndex)
+	// fmt.Printf("sending heart beat from server %v to server %v\n", rf.Me(), serverIndex)
 	//send empty hearthbeat to all other servers to indicate leader has been elected
 	appendEntriesArgs := AppendEntriesArgs{
 		Term:     rf.CurrentTerm(),
