@@ -231,16 +231,20 @@ func (rf *Raft) processRequestVoteRequest(args RequestVoteArgs) RequestVoteReply
 		return reply
 	}
 
+	// If the term of the request peer is larger than this node, update the term
+	// If the term is equal and we've already voted for a different candidate then
+	// don't vote for this candidate.
 	if args.Term > rf.CurrentTerm() {
 		rf.SetCurrentTerm(args.Term)
+	} else if rf.VotedFor() != -1 && rf.VotedFor() != args.CandidateId {
+		reply.VoteGranted = false
+		reply.Term = rf.CurrentTerm()
+		return reply
 	}
-	//TODO: these cases should be mutually exclusive so that duel candidates can vote for the higher term of the two
-	if rf.VotedFor() == -1 {
-		reply.VoteGranted = true
-		reply.Term = args.Term
 
-		rf.SetVotedFor(args.CandidateId)
-	}
+	reply.VoteGranted = true
+	reply.Term = rf.CurrentTerm()
+	rf.SetVotedFor(args.CandidateId)
 	return reply
 }
 
