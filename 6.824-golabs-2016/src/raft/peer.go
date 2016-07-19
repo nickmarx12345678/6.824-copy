@@ -58,10 +58,10 @@ func (peer *Peer) heartBeat() {
 	for {
 		select {
 		case <-peer.stopChan:
-			fmt.Println("stop heart beat from stopChan")
+			fmt.Printf("stopping peer %v heart beat from stopChan\n", peer.me)
 			return
 		case <-ticker:
-			peer.raft.sendHeartBeat2(peer.me)
+			go peer.raft.sendHeartBeat(peer.me)
 		}
 	}
 }
