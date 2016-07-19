@@ -207,7 +207,6 @@ func (rf *Raft) processAppendEntriesRequest(args AppendEntriesArgs) AppendEntrie
 	fmt.Printf("server %v received appendEntries from server %v stating term %v\n", rf.me, args.LeaderId, args.Term)
 	//reset heartBeatTimeout2
 	rf.peers[args.LeaderId].setLastActivity(time.Now())
-	rf.SetVotedFor(-1) //TODO: is this the right place to clear this
 
 	if args.Term < rf.CurrentTerm() {
 		fmt.Printf("append entries success == false, server %v with current term %v higher than term %v sent from server %v\n", rf.Me(), rf.CurrentTerm(), args.Term, args.LeaderId)
@@ -215,6 +214,7 @@ func (rf *Raft) processAppendEntriesRequest(args AppendEntriesArgs) AppendEntrie
 		reply.Term = rf.CurrentTerm() //todo when do we set this to me.currentTerm?
 		return reply
 	}
+	rf.SetVotedFor(-1) //TODO: is this the right place to clear this
 
 	//another leader has been elected, follow it
 	rf.SetState(States.Follower)
