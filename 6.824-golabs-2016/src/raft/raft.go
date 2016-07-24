@@ -56,6 +56,7 @@ type Raft struct {
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	applyCh       chan ApplyMsg
 	currentTerm   int
 	votedFor      bool
 	log           []*ApplyMsg
@@ -73,6 +74,7 @@ type AppendEntries struct {
 	LeaderID     int
 	PrevLogIndex int
 	PrevLogTerm  int
+	ApplyMsg     *ApplyMsg
 	Entries      []*ApplyMsg
 	LeaderCommit []int
 }
@@ -188,6 +190,14 @@ func (rf *Raft) ProcessAppendEntries(args AppendEntries, reply *AppendEntriesRep
 	rf.receivedHeartbeat = true
 	reply.Term = args.Term
 	reply.Success = true
+	if args.ApplyMsg.Index > -1 {
+		applyMsg := *args.ApplyMsg
+		go func() {
+			rf.log = append(rf.log, &applyMsg)
+			rf.applyCh <- applyMsg
+		}()
+		//fmt.Println("Server", rf.me, "accepted cmd", (applyMsg.Command).(int), "at index", len(rf.log))
+	}
 	if args.Term > rf.currentTerm {
 		rf.increaseTerm(args.Term)
 		rf.isLeader = false
@@ -223,7 +233,22 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-
+	if !rf.isLeader {
+		return -1, -1, false
+	}
+	index = len(rf.log) + 1
+	term = rf.currentTerm
+	applyMsg := ApplyMsg{
+		Index:   index,
+		Command: command,
+	}
+	//fmt.Println("Leader", rf.me, "accepted cmd", (applyMsg.Command).(int), "at index", len(rf.log))
+	go func() {
+		rf.log = append(rf.log, &applyMsg)
+		rf.applyCh <- applyMsg
+	}()
+	//rf.log[len(rf.log)] = &applyMsg
+	go rf.sendHeartbeat(&applyMsg)
 	return index, term, isLeader
 }
 
@@ -254,7 +279,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
+	rf.applyCh = applyCh
 	// Your initialization code here.
 	// Initialize timer for recognizing heartbeats.
 	go rf.listenForHeartbeat()
@@ -305,7 +330,7 @@ func (rf *Raft) listenForHeartbeat() {
 	go rf.listenForHeartbeat()
 }
 
-func (rf *Raft) sendHeartbeat() {
+func (rf *Raft) sendHeartbeat(applyMsg *ApplyMsg) {
 	if !rf.isLeader {
 		return
 	}
@@ -314,6 +339,7 @@ func (rf *Raft) sendHeartbeat() {
 		LeaderID:     rf.me,
 		PrevLogIndex: 0,
 		PrevLogTerm:  0,
+		ApplyMsg:     applyMsg,
 	}
 	reply := AppendEntriesReply{}
 	for x := 0; x < len(rf.peers); x++ {
@@ -324,7 +350,7 @@ func (rf *Raft) sendHeartbeat() {
 		rf.sendAppendEntries(x, appendEntries, &reply)
 	}
 	time.Sleep(50 * time.Millisecond)
-	go rf.sendHeartbeat()
+	go rf.sendHeartbeat(&ApplyMsg{Index: -1})
 }
 
 func (rf *Raft) startElection() {
@@ -366,7 +392,7 @@ func (rf *Raft) startElection() {
 		if debug() {
 			fmt.Println("Server", rf.me, "elected as leader.")
 		}
-		go rf.sendHeartbeat()
+		go rf.sendHeartbeat(&ApplyMsg{Index: -1})
 	} else {
 		rf.isLeader = false
 		go rf.listenForHeartbeat()
